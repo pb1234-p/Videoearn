@@ -1,15 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth } from '../firebase';
-import { doc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { supabase } from '../supabase';
+import { useAuth } from '../hooks/useAuth';
 import { UserProfile } from '../types';
 import Layout from '../components/Layout';
-import { User, Mail, Wallet, Save, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { User, Mail, Wallet, Save, Loader as Loader2, CircleCheck as CheckCircle, CircleAlert as AlertCircle } from 'lucide-react';
 import { CURRENCY_SYMBOL } from '../constants';
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
 
 export default function Profile() {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [upiId, setUpiId] = useState('');
   const [loading, setLoading] = useState(false);
@@ -19,16 +17,44 @@ export default function Profile() {
   useEffect(() => {
     if (!user) return;
 
-    const userDocRef = doc(db, 'users', user.uid);
-    const unsubscribe = onSnapshot(userDocRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data() as UserProfile;
-        setProfile(data);
-        if (data.upiId) setUpiId(data.upiId);
-      }
-    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}`));
+    const fetchProfile = async () => {
+      const { data } = await supabase
+        .from('users')
+        .select('*')
+        .eq('uid', user.id)
+        .single();
 
-    return () => unsubscribe();
+      if (data) {
+        const profileData = data as UserProfile;
+        setProfile(profileData);
+        if (profileData.upiId) setUpiId(profileData.upiId);
+      }
+    };
+
+    fetchProfile();
+
+    // Subscribe to profile changes
+    const profileChannel = supabase
+      .channel('user-profile-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'users',
+          filter: `uid=eq.${user.id}`,
+        },
+        (payload) => {
+          const profileData = payload.new as UserProfile;
+          setProfile(profileData);
+          if (profileData.upiId) setUpiId(profileData.upiId);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(profileChannel);
+    };
   }, [user]);
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
@@ -45,16 +71,18 @@ export default function Profile() {
     setSuccess(false);
 
     try {
-      const userRef = doc(db, 'users', user.uid);
-      await updateDoc(userRef, {
-        upiId: upiId,
-        updatedAt: new Date().toISOString()
-      });
+      await supabase
+        .from('users')
+        .update({
+          upiId: upiId,
+          updatedAt: new Date().toISOString()
+        })
+        .eq('uid', user.id);
+
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
       setError('Failed to update profile');
-      handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
     } finally {
       setLoading(false);
     }

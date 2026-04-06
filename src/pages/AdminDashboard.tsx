@@ -1,42 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth } from '../firebase';
-import { 
-  collection, 
-  query, 
-  onSnapshot, 
-  orderBy, 
-  addDoc, 
-  deleteDoc, 
-  doc, 
-  updateDoc, 
-  increment,
-  getDoc,
-  where
-} from 'firebase/firestore';
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { supabase } from '../supabase';
+import { useAuth } from '../hooks/useAuth';
 import { Video, WithdrawalRequest, UserProfile } from '../types';
 import Layout from '../components/Layout';
-import { 
-  Plus, 
-  Trash2, 
-  Check, 
-  X, 
-  Loader2, 
-  PlayCircle, 
-  Wallet, 
-  Users, 
-  AlertCircle,
-  Video as VideoIcon,
-  ExternalLink
-} from 'lucide-react';
+import { Plus, Trash2, Check, X, Loader as Loader2, CirclePlay as PlayCircle, Wallet, Users, CircleAlert as AlertCircle, Video as VideoIcon, ExternalLink } from 'lucide-react';
 import { ADMIN_EMAIL, CURRENCY_SYMBOL } from '../constants';
 import { Navigate } from 'react-router-dom';
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
 
 import AdminWithdrawalRow from '../components/AdminWithdrawalRow';
 
 export default function AdminDashboard() {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [videos, setVideos] = useState<Video[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -56,35 +30,101 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!user || user.email !== ADMIN_EMAIL) return;
 
-    const unsubscribeVideos = onSnapshot(
-      query(collection(db, 'videos'), orderBy('createdAt', 'desc')),
-      (snapshot) => {
-        setVideos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Video)));
-      },
-      (error) => handleFirestoreError(error, OperationType.LIST, 'videos')
-    );
+    // Fetch videos
+    const fetchVideos = async () => {
+      const { data } = await supabase
+        .from('videos')
+        .select('*')
+        .order('createdAt', { ascending: false });
 
-    const unsubscribeWithdrawals = onSnapshot(
-      query(collection(db, 'withdrawals'), orderBy('createdAt', 'desc')),
-      (snapshot) => {
-        setWithdrawals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WithdrawalRequest)));
-      },
-      (error) => handleFirestoreError(error, OperationType.LIST, 'withdrawals')
-    );
+      if (data) {
+        setVideos(data as Video[]);
+      }
+    };
 
-    const unsubscribeUsers = onSnapshot(
-      query(collection(db, 'users'), orderBy('createdAt', 'desc')),
-      (snapshot) => {
-        setUsers(snapshot.docs.map(doc => ({ ...doc.data() } as UserProfile)));
+    fetchVideos();
+
+    // Subscribe to videos changes
+    const videosChannel = supabase
+      .channel('admin-videos-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'videos',
+        },
+        () => {
+          fetchVideos();
+        }
+      )
+      .subscribe();
+
+    // Fetch withdrawals
+    const fetchWithdrawals = async () => {
+      const { data } = await supabase
+        .from('withdrawals')
+        .select('*')
+        .order('createdAt', { ascending: false });
+
+      if (data) {
+        setWithdrawals(data as WithdrawalRequest[]);
+      }
+    };
+
+    fetchWithdrawals();
+
+    // Subscribe to withdrawals changes
+    const withdrawalsChannel = supabase
+      .channel('admin-withdrawals-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'withdrawals',
+        },
+        () => {
+          fetchWithdrawals();
+        }
+      )
+      .subscribe();
+
+    // Fetch users
+    const fetchUsers = async () => {
+      const { data } = await supabase
+        .from('users')
+        .select('*')
+        .order('createdAt', { ascending: false });
+
+      if (data) {
+        setUsers(data as UserProfile[]);
         setLoading(false);
-      },
-      (error) => handleFirestoreError(error, OperationType.LIST, 'users')
-    );
+      }
+    };
+
+    fetchUsers();
+
+    // Subscribe to users changes
+    const usersChannel = supabase
+      .channel('admin-users-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'users',
+        },
+        () => {
+          fetchUsers();
+        }
+      )
+      .subscribe();
 
     return () => {
-      unsubscribeVideos();
-      unsubscribeWithdrawals();
-      unsubscribeUsers();
+      supabase.removeChannel(videosChannel);
+      supabase.removeChannel(withdrawalsChannel);
+      supabase.removeChannel(usersChannel);
     };
   }, [user]);
 
@@ -106,11 +146,10 @@ export default function AdminDashboard() {
         createdAt: now,
         active: true,
       };
-      await addDoc(collection(db, 'videos'), videoData);
+      await supabase.from('videos').insert(videoData);
       setNewVideo({ title: '', description: '', youtubeUrl: '', rewardAmount: '', duration: '60' });
     } catch (err) {
       console.error('Failed to add video', err);
-      handleFirestoreError(err, OperationType.CREATE, 'videos');
     } finally {
       setAddingVideo(false);
     }
@@ -119,48 +158,61 @@ export default function AdminDashboard() {
   const handleDeleteVideo = async (id: string) => {
     if (window.confirm('Are you sure you want to delete this video?')) {
       try {
-        await deleteDoc(doc(db, 'videos', id));
+        await supabase.from('videos').delete().eq('id', id);
       } catch (err) {
         console.error('Failed to delete video', err);
-        handleFirestoreError(err, OperationType.DELETE, `videos/${id}`);
       }
     }
   };
 
   const handleApproveWithdrawal = async (request: WithdrawalRequest) => {
     if (request.status !== 'pending') return;
-    
+
     try {
       const now = new Date().toISOString();
-      // 1. Update user balance (subtract the amount)
-      const userRef = doc(db, 'users', request.userId);
-      await updateDoc(userRef, {
-        balance: increment(-request.amount),
-        updatedAt: now
-      });
 
-      // 2. Update withdrawal status
-      const withdrawalRef = doc(db, 'withdrawals', request.id);
-      await updateDoc(withdrawalRef, {
-        status: 'approved',
-        updatedAt: now
-      });
+      // 1. Get current user balance
+      const { data: userData } = await supabase
+        .from('users')
+        .select('balance')
+        .eq('uid', request.userId)
+        .single();
+
+      if (userData) {
+        // 2. Update user balance (subtract the amount)
+        await supabase
+          .from('users')
+          .update({
+            balance: userData.balance - request.amount,
+            updatedAt: now
+          })
+          .eq('uid', request.userId);
+
+        // 3. Update withdrawal status
+        await supabase
+          .from('withdrawals')
+          .update({
+            status: 'approved',
+            updatedAt: now
+          })
+          .eq('id', request.id);
+      }
     } catch (err) {
       console.error('Failed to approve withdrawal', err);
-      handleFirestoreError(err, OperationType.WRITE, `withdrawals/${request.id}`);
     }
   };
 
   const handleRejectWithdrawal = async (id: string) => {
     try {
-      const withdrawalRef = doc(db, 'withdrawals', id);
-      await updateDoc(withdrawalRef, {
-        status: 'rejected',
-        updatedAt: new Date().toISOString()
-      });
+      await supabase
+        .from('withdrawals')
+        .update({
+          status: 'rejected',
+          updatedAt: new Date().toISOString()
+        })
+        .eq('id', id);
     } catch (err) {
       console.error('Failed to reject withdrawal', err);
-      handleFirestoreError(err, OperationType.UPDATE, `withdrawals/${id}`);
     }
   };
 

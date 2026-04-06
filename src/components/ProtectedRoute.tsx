@@ -1,9 +1,8 @@
 import { ReactNode, useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { useAuthState } from 'react-firebase-hooks/auth';
-import { auth, db } from '../firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { Loader2 } from 'lucide-react';
+import { useAuth } from '../hooks/useAuth';
+import { supabase } from '../supabase';
+import { Loader as Loader2 } from 'lucide-react';
 import { UserProfile } from '../types';
 import { ADMIN_EMAIL } from '../constants';
 
@@ -13,32 +12,43 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
-  const [user, loading] = useAuthState(auth);
+  const { user, loading } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
 
   useEffect(() => {
     const fetchOrCreateProfile = async () => {
       if (user) {
-        const docRef = doc(db, 'users', user.uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setProfile(docSnap.data() as UserProfile);
-        } else {
-          // Create initial profile if it doesn't exist
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .eq('uid', user.id)
+          .single();
+
+        if (data) {
+          setProfile(data as UserProfile);
+        } else if (error && error.code === 'PGRST116') {
+          // Profile doesn't exist, create it
           const now = new Date().toISOString();
           const newProfile: UserProfile = {
-            uid: user.uid,
+            uid: user.id,
             email: user.email || '',
-            displayName: user.displayName || 'User',
+            displayName: user.user_metadata?.full_name || user.email || 'User',
             balance: 0,
             totalEarned: 0,
             role: user.email === ADMIN_EMAIL ? 'admin' : 'user',
             createdAt: now,
             updatedAt: now,
           };
-          await setDoc(docRef, newProfile);
-          setProfile(newProfile);
+          const { data: insertedData } = await supabase
+            .from('users')
+            .insert(newProfile)
+            .select()
+            .single();
+
+          if (insertedData) {
+            setProfile(insertedData as UserProfile);
+          }
         }
       }
       setProfileLoading(false);

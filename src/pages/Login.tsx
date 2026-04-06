@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { signInWithGoogle } from '../firebase';
+import { signInWithGoogle } from '../supabase';
 import { useNavigate } from 'react-router-dom';
-import { Chrome, Loader2, PlayCircle } from 'lucide-react';
+import { Chromium as Chrome, Loader as Loader2, CirclePlay as PlayCircle } from 'lucide-react';
 import { APP_NAME } from '../constants';
 
 export default function Login() {

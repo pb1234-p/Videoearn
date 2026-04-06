@@ -1,18 +1,8 @@
 import { ReactNode, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { auth, logout } from '../firebase';
-import { useAuthState } from 'react-firebase-hooks/auth';
-import { 
-  Home, 
-  User, 
-  Wallet, 
-  History, 
-  LogOut, 
-  ShieldCheck, 
-  Menu, 
-  X,
-  PlayCircle
-} from 'lucide-react';
+import { logout } from '../supabase';
+import { useAuth } from '../hooks/useAuth';
+import { Hop as Home, User, Wallet, History, LogOut, ShieldCheck, Menu, X, CirclePlay as PlayCircle } from 'lucide-react';
 import { APP_NAME, ADMIN_EMAIL } from '../constants';
 import { cn } from '../lib/utils';
 
@@ -23,7 +13,7 @@ interface LayoutProps {
 import UserAvatar from './UserAvatar';
 
 export default function Layout({ children }: LayoutProps) {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -82,7 +72,7 @@ export default function Layout({ children }: LayoutProps) {
               ))}
               <div className="h-6 w-px bg-gray-200 mx-2"></div>
               <div className="flex items-center gap-3 pl-2">
-                <UserAvatar displayName={user?.displayName || ''} className="w-8 h-8" />
+                <UserAvatar displayName={user?.user_metadata?.full_name || user?.email || ''} className="w-8 h-8" />
                 <button
                   onClick={handleLogout}
                   className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
@@ -110,9 +100,9 @@ export default function Layout({ children }: LayoutProps) {
           <div className="md:hidden bg-white border-t border-gray-200">
             <div className="px-2 pt-2 pb-3 space-y-1">
               <div className="flex items-center gap-3 px-3 py-3 border-b border-gray-100 mb-2">
-                <UserAvatar displayName={user?.displayName || ''} />
+                <UserAvatar displayName={user?.user_metadata?.full_name || user?.email || ''} />
                 <div className="min-w-0">
-                  <p className="text-sm font-bold text-gray-900 truncate">{user?.displayName}</p>
+                  <p className="text-sm font-bold text-gray-900 truncate">{user?.user_metadata?.full_name || user?.email}</p>
                   <p className="text-xs text-gray-500 truncate">{user?.email}</p>
                 </div>
               </div>

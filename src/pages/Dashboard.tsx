@@ -1,18 +1,15 @@
 import { useState, useEffect } from 'react';
-import { db, auth } from '../firebase';
-import { collection, query, where, onSnapshot, orderBy, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { supabase } from '../supabase';
+import { useAuth } from '../hooks/useAuth';
 import { Video, UserProfile, WatchedVideo } from '../types';
 import Layout from '../components/Layout';
 import EmptyState from '../components/EmptyState';
-import { Play, Wallet, Trophy, Loader2, PlayCircle, AlertCircle } from 'lucide-react';
+import { Play, Wallet, Trophy, Loader as Loader2, CirclePlay as PlayCircle, CircleAlert as AlertCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { CURRENCY_SYMBOL, ADMIN_EMAIL } from '../constants';
 
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
-
 export default function Dashboard() {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [videos, setVideos] = useState<Video[]>([]);
   const [watchedVideoIds, setWatchedVideoIds] = useState<Set<string>>(new Set());
@@ -22,57 +19,127 @@ export default function Dashboard() {
     if (!user) return;
 
     // Fetch or create user profile
-    const userDocRef = doc(db, 'users', user.uid);
-    const unsubscribeProfile = onSnapshot(userDocRef, async (snapshot) => {
-      if (snapshot.exists()) {
-        setProfile(snapshot.data() as UserProfile);
-      } else {
+    const fetchProfile = async () => {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('uid', user.id)
+        .single();
+
+      if (data) {
+        setProfile(data as UserProfile);
+      } else if (error && error.code === 'PGRST116') {
         // Create initial profile
         const now = new Date().toISOString();
         const newProfile: UserProfile = {
-          uid: user.uid,
+          uid: user.id,
           email: user.email || '',
-          displayName: user.displayName || 'User',
+          displayName: user.user_metadata?.full_name || user.email || 'User',
           balance: 0,
           totalEarned: 0,
           role: user.email === ADMIN_EMAIL ? 'admin' : 'user',
           createdAt: now,
           updatedAt: now,
         };
-        try {
-          await setDoc(userDocRef, newProfile);
-          setProfile(newProfile);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
+        const { data: insertedData } = await supabase
+          .from('users')
+          .insert(newProfile)
+          .select()
+          .single();
+
+        if (insertedData) {
+          setProfile(insertedData as UserProfile);
         }
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
-    });
+    };
+
+    fetchProfile();
+
+    // Subscribe to profile changes
+    const profileChannel = supabase
+      .channel('profile-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'users',
+          filter: `uid=eq.${user.id}`,
+        },
+        (payload) => {
+          setProfile(payload.new as UserProfile);
+        }
+      )
+      .subscribe();
 
     // Fetch watched videos
-    const watchedQuery = query(collection(db, 'watched_videos'), where('userId', '==', user.uid));
-    const unsubscribeWatched = onSnapshot(watchedQuery, (snapshot) => {
-      const ids = new Set(snapshot.docs.map(doc => (doc.data() as WatchedVideo).videoId));
-      setWatchedVideoIds(ids);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'watched_videos');
-    });
+    const fetchWatchedVideos = async () => {
+      const { data } = await supabase
+        .from('watched_videos')
+        .select('videoId')
+        .eq('userId', user.id);
+
+      if (data) {
+        const ids = new Set(data.map((item) => item.videoId));
+        setWatchedVideoIds(ids);
+      }
+    };
+
+    fetchWatchedVideos();
+
+    // Subscribe to watched videos changes
+    const watchedChannel = supabase
+      .channel('watched-videos-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'watched_videos',
+          filter: `userId=eq.${user.id}`,
+        },
+        () => {
+          fetchWatchedVideos();
+        }
+      )
+      .subscribe();
 
     // Fetch active videos
-    const videosQuery = query(collection(db, 'videos'), where('active', '==', true), orderBy('createdAt', 'desc'));
-    const unsubscribeVideos = onSnapshot(videosQuery, (snapshot) => {
-      const videoList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Video));
-      setVideos(videoList);
-      setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'videos');
-    });
+    const fetchVideos = async () => {
+      const { data } = await supabase
+        .from('videos')
+        .select('*')
+        .eq('active', true)
+        .order('createdAt', { ascending: false });
+
+      if (data) {
+        setVideos(data as Video[]);
+        setLoading(false);
+      }
+    };
+
+    fetchVideos();
+
+    // Subscribe to videos changes
+    const videosChannel = supabase
+      .channel('videos-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'videos',
+        },
+        () => {
+          fetchVideos();
+        }
+      )
+      .subscribe();
 
     return () => {
-      unsubscribeProfile();
-      unsubscribeWatched();
-      unsubscribeVideos();
+      supabase.removeChannel(profileChannel);
+      supabase.removeChannel(watchedChannel);
+      supabase.removeChannel(videosChannel);
     };
   }, [user]);
 
