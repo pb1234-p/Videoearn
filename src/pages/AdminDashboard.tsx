@@ -1,16 +1,43 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../supabase';
-import { useAuth } from '../hooks/useAuth';
+import { db, auth } from '../firebase';
+import { 
+  collection, 
+  query, 
+  onSnapshot, 
+  orderBy, 
+  addDoc, 
+  deleteDoc, 
+  doc, 
+  updateDoc, 
+  increment,
+  getDoc,
+  where
+} from 'firebase/firestore';
+import { useAuthState } from 'react-firebase-hooks/auth';
 import { Video, WithdrawalRequest, UserProfile } from '../types';
 import Layout from '../components/Layout';
-import { Plus, Trash2, Check, X, Loader as Loader2, CirclePlay as PlayCircle, Wallet, Users, CircleAlert as AlertCircle, Video as VideoIcon, ExternalLink } from 'lucide-react';
+import { 
+  Plus, 
+  Trash2, 
+  Check, 
+  X, 
+  Loader2, 
+  PlayCircle, 
+  Wallet, 
+  Users, 
+  AlertCircle,
+  Video as VideoIcon,
+  ExternalLink
+} from 'lucide-react';
 import { ADMIN_EMAIL, CURRENCY_SYMBOL } from '../constants';
 import { Navigate } from 'react-router-dom';
+import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
+import { getYouTubeId } from '../lib/utils';
 
 import AdminWithdrawalRow from '../components/AdminWithdrawalRow';
 
 export default function AdminDashboard() {
-  const { user } = useAuth();
+  const [user] = useAuthState(auth);
   const [videos, setVideos] = useState<Video[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -30,101 +57,35 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!user || user.email !== ADMIN_EMAIL) return;
 
-    // Fetch videos
-    const fetchVideos = async () => {
-      const { data } = await supabase
-        .from('videos')
-        .select('*')
-        .order('createdAt', { ascending: false });
+    const unsubscribeVideos = onSnapshot(
+      query(collection(db, 'videos'), orderBy('createdAt', 'desc')),
+      (snapshot) => {
+        setVideos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Video)));
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'videos')
+    );
 
-      if (data) {
-        setVideos(data as Video[]);
-      }
-    };
+    const unsubscribeWithdrawals = onSnapshot(
+      query(collection(db, 'withdrawals'), orderBy('createdAt', 'desc')),
+      (snapshot) => {
+        setWithdrawals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WithdrawalRequest)));
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'withdrawals')
+    );
 
-    fetchVideos();
-
-    // Subscribe to videos changes
-    const videosChannel = supabase
-      .channel('admin-videos-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'videos',
-        },
-        () => {
-          fetchVideos();
-        }
-      )
-      .subscribe();
-
-    // Fetch withdrawals
-    const fetchWithdrawals = async () => {
-      const { data } = await supabase
-        .from('withdrawals')
-        .select('*')
-        .order('createdAt', { ascending: false });
-
-      if (data) {
-        setWithdrawals(data as WithdrawalRequest[]);
-      }
-    };
-
-    fetchWithdrawals();
-
-    // Subscribe to withdrawals changes
-    const withdrawalsChannel = supabase
-      .channel('admin-withdrawals-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'withdrawals',
-        },
-        () => {
-          fetchWithdrawals();
-        }
-      )
-      .subscribe();
-
-    // Fetch users
-    const fetchUsers = async () => {
-      const { data } = await supabase
-        .from('users')
-        .select('*')
-        .order('createdAt', { ascending: false });
-
-      if (data) {
-        setUsers(data as UserProfile[]);
+    const unsubscribeUsers = onSnapshot(
+      query(collection(db, 'users'), orderBy('createdAt', 'desc')),
+      (snapshot) => {
+        setUsers(snapshot.docs.map(doc => ({ ...doc.data() } as UserProfile)));
         setLoading(false);
-      }
-    };
-
-    fetchUsers();
-
-    // Subscribe to users changes
-    const usersChannel = supabase
-      .channel('admin-users-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'users',
-        },
-        () => {
-          fetchUsers();
-        }
-      )
-      .subscribe();
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'users')
+    );
 
     return () => {
-      supabase.removeChannel(videosChannel);
-      supabase.removeChannel(withdrawalsChannel);
-      supabase.removeChannel(usersChannel);
+      unsubscribeVideos();
+      unsubscribeWithdrawals();
+      unsubscribeUsers();
     };
   }, [user]);
 
@@ -146,10 +107,11 @@ export default function AdminDashboard() {
         createdAt: now,
         active: true,
       };
-      await supabase.from('videos').insert(videoData);
+      await addDoc(collection(db, 'videos'), videoData);
       setNewVideo({ title: '', description: '', youtubeUrl: '', rewardAmount: '', duration: '60' });
     } catch (err) {
       console.error('Failed to add video', err);
+      handleFirestoreError(err, OperationType.CREATE, 'videos');
     } finally {
       setAddingVideo(false);
     }
@@ -158,61 +120,48 @@ export default function AdminDashboard() {
   const handleDeleteVideo = async (id: string) => {
     if (window.confirm('Are you sure you want to delete this video?')) {
       try {
-        await supabase.from('videos').delete().eq('id', id);
+        await deleteDoc(doc(db, 'videos', id));
       } catch (err) {
         console.error('Failed to delete video', err);
+        handleFirestoreError(err, OperationType.DELETE, `videos/${id}`);
       }
     }
   };
 
   const handleApproveWithdrawal = async (request: WithdrawalRequest) => {
     if (request.status !== 'pending') return;
-
+    
     try {
       const now = new Date().toISOString();
+      // 1. Update user balance (subtract the amount)
+      const userRef = doc(db, 'users', request.userId);
+      await updateDoc(userRef, {
+        balance: increment(-request.amount),
+        updatedAt: now
+      });
 
-      // 1. Get current user balance
-      const { data: userData } = await supabase
-        .from('users')
-        .select('balance')
-        .eq('uid', request.userId)
-        .single();
-
-      if (userData) {
-        // 2. Update user balance (subtract the amount)
-        await supabase
-          .from('users')
-          .update({
-            balance: userData.balance - request.amount,
-            updatedAt: now
-          })
-          .eq('uid', request.userId);
-
-        // 3. Update withdrawal status
-        await supabase
-          .from('withdrawals')
-          .update({
-            status: 'approved',
-            updatedAt: now
-          })
-          .eq('id', request.id);
-      }
+      // 2. Update withdrawal status
+      const withdrawalRef = doc(db, 'withdrawals', request.id);
+      await updateDoc(withdrawalRef, {
+        status: 'approved',
+        updatedAt: now
+      });
     } catch (err) {
       console.error('Failed to approve withdrawal', err);
+      handleFirestoreError(err, OperationType.WRITE, `withdrawals/${request.id}`);
     }
   };
 
   const handleRejectWithdrawal = async (id: string) => {
     try {
-      await supabase
-        .from('withdrawals')
-        .update({
-          status: 'rejected',
-          updatedAt: new Date().toISOString()
-        })
-        .eq('id', id);
+      const withdrawalRef = doc(db, 'withdrawals', id);
+      await updateDoc(withdrawalRef, {
+        status: 'rejected',
+        updatedAt: new Date().toISOString()
+      });
     } catch (err) {
       console.error('Failed to reject withdrawal', err);
+      handleFirestoreError(err, OperationType.UPDATE, `withdrawals/${id}`);
     }
   };
 
@@ -343,7 +292,7 @@ export default function AdminDashboard() {
                     <div key={video.id} className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex items-center gap-4">
                       <div className="w-24 h-16 bg-gray-100 rounded-lg flex-shrink-0 overflow-hidden">
                         <img 
-                          src={`https://img.youtube.com/vi/${video.youtubeUrl.split('v=')[1]?.split('&')[0] || video.youtubeUrl.split('/').pop()}/mqdefault.jpg`}
+                          src={`https://img.youtube.com/vi/${getYouTubeId(video.youtubeUrl)}/mqdefault.jpg`}
                           className="w-full h-full object-cover"
                           referrerPolicy="no-referrer"
                         />

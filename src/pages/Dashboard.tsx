@@ -1,145 +1,93 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../supabase';
-import { useAuth } from '../hooks/useAuth';
+import { db, auth } from '../firebase';
+import { collection, query, where, onSnapshot, orderBy, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
+import { useAuthState } from 'react-firebase-hooks/auth';
 import { Video, UserProfile, WatchedVideo } from '../types';
 import Layout from '../components/Layout';
 import EmptyState from '../components/EmptyState';
-import { Play, Wallet, Trophy, Loader as Loader2, CirclePlay as PlayCircle, CircleAlert as AlertCircle } from 'lucide-react';
+import { Play, Wallet, Trophy, Loader2, PlayCircle, AlertCircle, ArrowRight, ShieldCheck, Zap } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { CURRENCY_SYMBOL, ADMIN_EMAIL } from '../constants';
+import { CURRENCY_SYMBOL, ADMIN_EMAIL, APP_NAME } from '../constants';
+import { getYouTubeId } from '../lib/utils';
+
+import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
+import { signInWithGoogle } from '../firebase';
 
 export default function Dashboard() {
-  const { user } = useAuth();
+  const [user] = useAuthState(auth);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [videos, setVideos] = useState<Video[]>([]);
   const [watchedVideoIds, setWatchedVideoIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!user) return;
+    // Only fetch data if we have a user
+    if (!user) {
+      // If no user, we still want to show active videos as a preview
+      const videosQuery = query(collection(db, 'videos'), where('active', '==', true), orderBy('createdAt', 'desc'));
+      const unsubscribeVideos = onSnapshot(videosQuery, (snapshot) => {
+        const videoList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Video));
+        setVideos(videoList);
+        setLoading(false);
+      }, (error) => {
+        console.warn('Silent fail for public video fetch', error);
+        setLoading(false);
+      });
+      return () => unsubscribeVideos();
+    }
 
     // Fetch or create user profile
-    const fetchProfile = async () => {
-      const { data, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('uid', user.id)
-        .single();
-
-      if (data) {
-        setProfile(data as UserProfile);
-      } else if (error && error.code === 'PGRST116') {
+    const userDocRef = doc(db, 'users', user.uid);
+    const unsubscribeProfile = onSnapshot(userDocRef, async (snapshot) => {
+      if (snapshot.exists()) {
+        setProfile(snapshot.data() as UserProfile);
+      } else {
         // Create initial profile
         const now = new Date().toISOString();
         const newProfile: UserProfile = {
-          uid: user.id,
+          uid: user.uid,
           email: user.email || '',
-          displayName: user.user_metadata?.full_name || user.email || 'User',
+          displayName: user.displayName || 'User',
           balance: 0,
           totalEarned: 0,
           role: user.email === ADMIN_EMAIL ? 'admin' : 'user',
           createdAt: now,
           updatedAt: now,
         };
-        const { data: insertedData } = await supabase
-          .from('users')
-          .insert(newProfile)
-          .select()
-          .single();
-
-        if (insertedData) {
-          setProfile(insertedData as UserProfile);
+        try {
+          await setDoc(userDocRef, newProfile);
+          setProfile(newProfile);
+        } catch (error) {
+          handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
         }
       }
-    };
-
-    fetchProfile();
-
-    // Subscribe to profile changes
-    const profileChannel = supabase
-      .channel('profile-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'users',
-          filter: `uid=eq.${user.id}`,
-        },
-        (payload) => {
-          setProfile(payload.new as UserProfile);
-        }
-      )
-      .subscribe();
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+    });
 
     // Fetch watched videos
-    const fetchWatchedVideos = async () => {
-      const { data } = await supabase
-        .from('watched_videos')
-        .select('videoId')
-        .eq('userId', user.id);
-
-      if (data) {
-        const ids = new Set(data.map((item) => item.videoId));
-        setWatchedVideoIds(ids);
-      }
-    };
-
-    fetchWatchedVideos();
-
-    // Subscribe to watched videos changes
-    const watchedChannel = supabase
-      .channel('watched-videos-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'watched_videos',
-          filter: `userId=eq.${user.id}`,
-        },
-        () => {
-          fetchWatchedVideos();
-        }
-      )
-      .subscribe();
+    const watchedQuery = query(collection(db, 'watched_videos'), where('userId', '==', user.uid));
+    const unsubscribeWatched = onSnapshot(watchedQuery, (snapshot) => {
+      const ids = new Set(snapshot.docs.map(doc => (doc.data() as WatchedVideo).videoId));
+      setWatchedVideoIds(ids);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'watched_videos');
+    });
 
     // Fetch active videos
-    const fetchVideos = async () => {
-      const { data } = await supabase
-        .from('videos')
-        .select('*')
-        .eq('active', true)
-        .order('createdAt', { ascending: false });
-
-      if (data) {
-        setVideos(data as Video[]);
-        setLoading(false);
-      }
-    };
-
-    fetchVideos();
-
-    // Subscribe to videos changes
-    const videosChannel = supabase
-      .channel('videos-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'videos',
-        },
-        () => {
-          fetchVideos();
-        }
-      )
-      .subscribe();
+    const videosQuery = query(collection(db, 'videos'), where('active', '==', true), orderBy('createdAt', 'desc'));
+    const unsubscribeVideos = onSnapshot(videosQuery, (snapshot) => {
+      const videoList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Video));
+      setVideos(videoList);
+      setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'videos');
+    });
 
     return () => {
-      supabase.removeChannel(profileChannel);
-      supabase.removeChannel(watchedChannel);
-      supabase.removeChannel(videosChannel);
+      unsubscribeProfile();
+      unsubscribeWatched();
+      unsubscribeVideos();
     };
   }, [user]);
 
@@ -157,39 +105,80 @@ export default function Dashboard() {
 
   return (
     <Layout>
-      <div className="space-y-8">
-        {/* Stats Section */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4">
-            <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-              <Wallet className="w-6 h-6 text-green-600" />
+      <div className="space-y-12">
+        {!user ? (
+          /* Hero Section for Guests */
+          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-blue-600 to-indigo-900 text-white p-8 md:p-16 shadow-2xl">
+            <div className="relative z-10 max-w-2xl">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/30 border border-blue-400/30 text-xs font-bold uppercase tracking-widest mb-6 backdrop-blur-sm">
+                <Zap className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                Easy Earning Platform
+              </div>
+              <h1 className="text-4xl md:text-6xl font-bold leading-tight mb-6">
+                Watch Videos. <span className="text-blue-300">Earn Real Cash.</span>
+              </h1>
+              <p className="text-lg md:text-xl text-blue-100 mb-10 leading-relaxed font-medium">
+                Join thousands of users earning in <span className="font-bold text-white">Indian Rupees (INR)</span> just by watching YouTube videos. Simple, fast, and 100% real.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-4">
+                <button
+                  onClick={() => signInWithGoogle()}
+                  className="flex items-center justify-center gap-3 bg-white text-blue-900 font-bold py-4 px-8 rounded-2xl shadow-xl hover:bg-blue-50 transition-all scale-100 hover:scale-105 active:scale-95"
+                >
+                  <PlayCircle className="w-6 h-6 text-blue-600" />
+                  Get Started for Free
+                </button>
+              </div>
+              <div className="mt-8 flex items-center gap-6 text-sm text-blue-200/80">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4" />
+                  Secure UPI Payments
+                </div>
+                <div className="flex items-center gap-2">
+                  <Trophy className="w-4 h-4" />
+                  Instant Rewards
+                </div>
+              </div>
             </div>
-            <div>
-              <p className="text-sm text-gray-500 font-medium uppercase tracking-wider">Current Balance</p>
-              <p className="text-2xl font-bold text-gray-900">{CURRENCY_SYMBOL}{profile?.balance.toFixed(2)}</p>
-            </div>
+            
+            {/* Decorative elements */}
+            <div className="absolute top-[-10%] right-[-10%] w-[40%] aspect-square bg-blue-500/20 rounded-full blur-[100px]" />
+            <div className="absolute bottom-[-20%] left-[-10%] w-[30%] aspect-square bg-indigo-500/20 rounded-full blur-[80px]" />
           </div>
+        ) : (
+          /* Stats Section for Logged-in Users */
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4">
+              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                <Wallet className="w-6 h-6 text-green-600" />
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 font-medium uppercase tracking-wider">Current Balance</p>
+                <p className="text-2xl font-bold text-gray-900">{CURRENCY_SYMBOL}{profile?.balance.toFixed(2)}</p>
+              </div>
+            </div>
 
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4">
-            <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-              <PlayCircle className="w-6 h-6 text-blue-600" />
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4">
+              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+                <PlayCircle className="w-6 h-6 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 font-medium uppercase tracking-wider">Videos Watched</p>
+                <p className="text-2xl font-bold text-gray-900">{watchedVideoIds.size}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm text-gray-500 font-medium uppercase tracking-wider">Videos Watched</p>
-              <p className="text-2xl font-bold text-gray-900">{watchedVideoIds.size}</p>
-            </div>
-          </div>
 
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4">
-            <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
-              <Trophy className="w-6 h-6 text-yellow-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500 font-medium uppercase tracking-wider">Available Tasks</p>
-              <p className="text-2xl font-bold text-gray-900">{availableVideos.length}</p>
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4">
+              <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
+                <Trophy className="w-6 h-6 text-yellow-600" />
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 font-medium uppercase tracking-wider">Available Tasks</p>
+                <p className="text-2xl font-bold text-gray-900">{availableVideos.length}</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* How it Works */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
@@ -237,7 +226,7 @@ export default function Dashboard() {
                 <div key={video.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-shadow group">
                   <div className="aspect-video bg-gray-100 relative">
                     <img 
-                      src={`https://img.youtube.com/vi/${video.youtubeUrl.split('v=')[1]?.split('&')[0] || video.youtubeUrl.split('/').pop()}/mqdefault.jpg`}
+                      src={`https://img.youtube.com/vi/${getYouTubeId(video.youtubeUrl)}/mqdefault.jpg`}
                       alt={video.title}
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"

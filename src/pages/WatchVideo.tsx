@@ -1,18 +1,22 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { supabase } from '../supabase';
-import { useAuth } from '../hooks/useAuth';
+import { db, auth } from '../firebase';
+import { doc, getDoc, updateDoc, increment, collection, addDoc } from 'firebase/firestore';
+import { useAuthState } from 'react-firebase-hooks/auth';
 import { Video, WatchedVideo } from '../types';
 import Layout from '../components/Layout';
 import VideoPlayer from '../components/VideoPlayer';
 import { YouTubeProps } from 'react-youtube';
-import { Loader as Loader2, ArrowLeft, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Timer } from 'lucide-react';
+import { Loader2, ArrowLeft, CheckCircle, AlertCircle, Timer } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { CURRENCY_SYMBOL } from '../constants';
+import { getYouTubeId } from '../lib/utils';
+
+import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
 
 export default function WatchVideo() {
   const { videoId } = useParams<{ videoId: string }>();
-  const { user } = useAuth();
+  const [user] = useAuthState(auth);
   const [video, setVideo] = useState<Video | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,21 +31,17 @@ export default function WatchVideo() {
     const fetchVideo = async () => {
       if (!videoId || !user) return;
       try {
-        const { data, error: fetchError } = await supabase
-          .from('videos')
-          .select('*')
-          .eq('id', videoId)
-          .single();
-
-        if (data) {
-          const videoData = data as Video;
+        const videoDoc = await getDoc(doc(db, 'videos', videoId));
+        if (videoDoc.exists()) {
+          const videoData = { id: videoDoc.id, ...videoDoc.data() } as Video;
           setVideo(videoData);
           setTimeLeft(videoData.duration || 60);
-        } else if (fetchError) {
+        } else {
           setError('Video not found');
         }
       } catch (err) {
         setError('Failed to load video');
+        handleFirestoreError(err, OperationType.GET, `videos/${videoId}`);
       } finally {
         setLoading(false);
       }
@@ -82,34 +82,22 @@ export default function WatchVideo() {
     setRewardClaimed(true);
     try {
       const now = new Date().toISOString();
-
       // 1. Add to watched_videos collection
-      const watchedVideo: Omit<WatchedVideo, 'id'> = {
-        userId: user.id,
+      const watchedVideo: WatchedVideo = {
+        userId: user.uid,
         videoId: video.id,
         watchedAt: now,
         rewardEarned: video.rewardAmount
       };
-      await supabase.from('watched_videos').insert(watchedVideo);
+      await addDoc(collection(db, 'watched_videos'), watchedVideo);
 
-      // 2. Get current user balance
-      const { data: userData } = await supabase
-        .from('users')
-        .select('balance, totalEarned')
-        .eq('uid', user.id)
-        .single();
-
-      if (userData) {
-        // 3. Update user balance and totalEarned
-        await supabase
-          .from('users')
-          .update({
-            balance: userData.balance + video.rewardAmount,
-            totalEarned: userData.totalEarned + video.rewardAmount,
-            updatedAt: now
-          })
-          .eq('uid', user.id);
-      }
+      // 2. Update user balance and totalEarned
+      const userRef = doc(db, 'users', user.uid);
+      await updateDoc(userRef, {
+        balance: increment(video.rewardAmount),
+        totalEarned: increment(video.rewardAmount),
+        updatedAt: now
+      });
 
       // Navigate back to dashboard after a short delay
       setTimeout(() => {
@@ -118,6 +106,7 @@ export default function WatchVideo() {
     } catch (err) {
       console.error('Failed to claim reward', err);
       setRewardClaimed(false);
+      handleFirestoreError(err, OperationType.WRITE, 'watched_videos/users');
     }
   };
 
@@ -145,7 +134,7 @@ export default function WatchVideo() {
     );
   }
 
-  const youtubeId = video.youtubeUrl.split('v=')[1]?.split('&')[0] || video.youtubeUrl.split('/').pop();
+  const youtubeId = getYouTubeId(video.youtubeUrl);
 
   return (
     <Layout>
@@ -155,12 +144,17 @@ export default function WatchVideo() {
         </Link>
 
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
-          <div className="bg-black">
-            {youtubeId && (
+          <div className="bg-black aspect-video flex items-center justify-center">
+            {youtubeId ? (
               <VideoPlayer
                 youtubeId={youtubeId}
                 onStateChange={handleStateChange}
               />
+            ) : (
+              <div className="text-white text-center p-8">
+                <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+                <p>Invalid Video URL. Please contact support or try another video.</p>
+              </div>
             )}
           </div>
 

@@ -1,57 +1,36 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../supabase';
-import { useAuth } from '../hooks/useAuth';
+import { db, auth } from '../firebase';
+import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { useAuthState } from 'react-firebase-hooks/auth';
 import { WithdrawalRequest } from '../types';
 import Layout from '../components/Layout';
-import { History as HistoryIcon, Loader as Loader2, CircleAlert as AlertCircle, CircleCheck as CheckCircle, Circle as XCircle, Clock } from 'lucide-react';
+import { History as HistoryIcon, Loader2, AlertCircle, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { CURRENCY_SYMBOL } from '../constants';
+import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
 
 import EmptyState from '../components/EmptyState';
 import WithdrawalStatus from '../components/WithdrawalStatus';
 
 export default function History() {
-  const { user } = useAuth();
+  const [user] = useAuthState(auth);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!user) return;
 
-    const fetchWithdrawals = async () => {
-      const { data } = await supabase
-        .from('withdrawals')
-        .select('*')
-        .eq('userId', user.id)
-        .order('createdAt', { ascending: false });
+    const withdrawalsQuery = query(
+      collection(db, 'withdrawals'),
+      where('userId', '==', user.uid),
+      orderBy('createdAt', 'desc')
+    );
+    const unsubscribe = onSnapshot(withdrawalsQuery, (snapshot) => {
+      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WithdrawalRequest));
+      setWithdrawals(list);
+      setLoading(false);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'withdrawals'));
 
-      if (data) {
-        setWithdrawals(data as WithdrawalRequest[]);
-        setLoading(false);
-      }
-    };
-
-    fetchWithdrawals();
-
-    // Subscribe to withdrawals changes
-    const withdrawalsChannel = supabase
-      .channel('history-withdrawals-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'withdrawals',
-          filter: `userId=eq.${user.id}`,
-        },
-        () => {
-          fetchWithdrawals();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(withdrawalsChannel);
-    };
+    return () => unsubscribe();
   }, [user]);
 
   if (loading) {

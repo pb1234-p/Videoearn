@@ -1,11 +1,10 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
-import { supabase } from './supabase';
-import { User } from '@supabase/supabase-js';
-import { Loader as Loader2 } from 'lucide-react';
+import { useAuthState } from 'react-firebase-hooks/auth';
+import { auth } from './firebase';
+import { Loader2 } from 'lucide-react';
 import ProtectedRoute from './components/ProtectedRoute';
 
-import Login from './pages/Login';
+// Pages
 import Dashboard from './pages/Dashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import Profile from './pages/Profile';
@@ -14,23 +13,7 @@ import History from './pages/History';
 import WatchVideo from './pages/WatchVideo';
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
+  const [user, loading] = useAuthState(auth);
 
   if (loading) {
     return (
@@ -43,8 +26,6 @@ export default function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
-        
         <Route path="/" element={
           <ProtectedRoute>
             <Dashboard />

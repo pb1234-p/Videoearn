@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../supabase';
-import { useAuth } from '../hooks/useAuth';
+import { db, auth } from '../firebase';
+import { doc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
+import { useAuthState } from 'react-firebase-hooks/auth';
 import { UserProfile, WithdrawalRequest } from '../types';
 import Layout from '../components/Layout';
-import { Wallet, Send, Loader as Loader2, CircleAlert as AlertCircle, CircleCheck as CheckCircle, Info } from 'lucide-react';
+import { Wallet, Send, Loader2, AlertCircle, CheckCircle, Info } from 'lucide-react';
 import { CURRENCY_SYMBOL, MIN_WITHDRAWAL_AMOUNT } from '../constants';
+import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
 
 import WithdrawalStatus from '../components/WithdrawalStatus';
 
 export default function Withdraw() {
-  const { user } = useAuth();
+  const [user] = useAuthState(auth);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [amount, setAmount] = useState<string>('');
   const [upiId, setUpiId] = useState<string>('');
@@ -21,76 +23,29 @@ export default function Withdraw() {
   useEffect(() => {
     if (!user) return;
 
-    const fetchProfile = async () => {
-      const { data } = await supabase
-        .from('users')
-        .select('*')
-        .eq('uid', user.id)
-        .single();
-
-      if (data) {
-        const profileData = data as UserProfile;
-        setProfile(profileData);
-        if (profileData.upiId) setUpiId(profileData.upiId);
+    const userDocRef = doc(db, 'users', user.uid);
+    const unsubscribeProfile = onSnapshot(userDocRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data() as UserProfile;
+        setProfile(data);
+        if (data.upiId) setUpiId(data.upiId);
       }
-    };
+    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}`));
 
-    fetchProfile();
-
-    // Subscribe to profile changes
-    const profileChannel = supabase
-      .channel('withdraw-profile-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'users',
-          filter: `uid=eq.${user.id}`,
-        },
-        (payload) => {
-          const profileData = payload.new as UserProfile;
-          setProfile(profileData);
-          if (profileData.upiId) setUpiId(profileData.upiId);
-        }
-      )
-      .subscribe();
-
-    const fetchWithdrawals = async () => {
-      const { data } = await supabase
-        .from('withdrawals')
-        .select('*')
-        .eq('userId', user.id)
-        .order('createdAt', { ascending: false })
-        .limit(5);
-
-      if (data) {
-        setRecentWithdrawals(data as WithdrawalRequest[]);
-      }
-    };
-
-    fetchWithdrawals();
-
-    // Subscribe to withdrawals changes
-    const withdrawalsChannel = supabase
-      .channel('user-withdrawals-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'withdrawals',
-          filter: `userId=eq.${user.id}`,
-        },
-        () => {
-          fetchWithdrawals();
-        }
-      )
-      .subscribe();
+    const withdrawalsQuery = query(
+      collection(db, 'withdrawals'),
+      where('userId', '==', user.uid),
+      orderBy('createdAt', 'desc'),
+      limit(5)
+    );
+    const unsubscribeWithdrawals = onSnapshot(withdrawalsQuery, (snapshot) => {
+      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WithdrawalRequest));
+      setRecentWithdrawals(list);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'withdrawals'));
 
     return () => {
-      supabase.removeChannel(profileChannel);
-      supabase.removeChannel(withdrawalsChannel);
+      unsubscribeProfile();
+      unsubscribeWithdrawals();
     };
   }, [user]);
 
@@ -121,7 +76,7 @@ export default function Withdraw() {
     try {
       const now = new Date().toISOString();
       const request: Omit<WithdrawalRequest, 'id'> = {
-        userId: user.id,
+        userId: user.uid,
         userEmail: user.email || '',
         amount: withdrawAmount,
         upiId: upiId,
@@ -130,11 +85,12 @@ export default function Withdraw() {
         updatedAt: now,
       };
 
-      await supabase.from('withdrawals').insert(request);
+      await addDoc(collection(db, 'withdrawals'), request);
       setSuccess('Withdrawal request submitted successfully! It will be processed within 24-48 hours.');
       setAmount('');
     } catch (err) {
       setError('Failed to submit withdrawal request');
+      handleFirestoreError(err, OperationType.CREATE, 'withdrawals');
     } finally {
       setLoading(false);
     }

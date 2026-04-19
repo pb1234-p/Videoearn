@@ -1,8 +1,18 @@
 import { ReactNode, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { logout } from '../supabase';
-import { useAuth } from '../hooks/useAuth';
-import { Hop as Home, User, Wallet, History, LogOut, ShieldCheck, Menu, X, CirclePlay as PlayCircle } from 'lucide-react';
+import { auth, logout, signInWithGoogle } from '../firebase';
+import { useAuthState } from 'react-firebase-hooks/auth';
+import { 
+  Home, 
+  User, 
+  Wallet, 
+  History, 
+  LogOut, 
+  ShieldCheck, 
+  Menu, 
+  X,
+  PlayCircle
+} from 'lucide-react';
 import { APP_NAME, ADMIN_EMAIL } from '../constants';
 import { cn } from '../lib/utils';
 
@@ -13,7 +23,7 @@ interface LayoutProps {
 import UserAvatar from './UserAvatar';
 
 export default function Layout({ children }: LayoutProps) {
-  const { user } = useAuth();
+  const [user] = useAuthState(auth);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -23,7 +33,7 @@ export default function Layout({ children }: LayoutProps) {
   const handleLogout = async () => {
     try {
       await logout();
-      navigate('/login');
+      navigate('/');
     } catch (err) {
       console.error('Logout failed', err);
     }
@@ -72,14 +82,23 @@ export default function Layout({ children }: LayoutProps) {
               ))}
               <div className="h-6 w-px bg-gray-200 mx-2"></div>
               <div className="flex items-center gap-3 pl-2">
-                <UserAvatar displayName={user?.user_metadata?.full_name || user?.email || ''} className="w-8 h-8" />
-                <button
-                  onClick={handleLogout}
-                  className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
-                >
-                  <LogOut className="w-4 h-4" />
-                  Logout
-                </button>
+                <UserAvatar displayName={user?.displayName || 'G'} className="w-8 h-8" />
+                {!user || user.isAnonymous ? (
+                  <button
+                    onClick={() => signInWithGoogle()}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold shadow-sm hover:bg-blue-700 transition-all font-sans"
+                  >
+                    🚀 Sign In
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleLogout}
+                    className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Logout
+                  </button>
+                )}
               </div>
             </div>
 
@@ -100,10 +119,14 @@ export default function Layout({ children }: LayoutProps) {
           <div className="md:hidden bg-white border-t border-gray-200">
             <div className="px-2 pt-2 pb-3 space-y-1">
               <div className="flex items-center gap-3 px-3 py-3 border-b border-gray-100 mb-2">
-                <UserAvatar displayName={user?.user_metadata?.full_name || user?.email || ''} />
+                <UserAvatar displayName={user?.displayName || 'G'} />
                 <div className="min-w-0">
-                  <p className="text-sm font-bold text-gray-900 truncate">{user?.user_metadata?.full_name || user?.email}</p>
-                  <p className="text-xs text-gray-500 truncate">{user?.email}</p>
+                  <p className="text-sm font-bold text-gray-900 truncate">
+                    {!user ? 'Welcome Guest' : user.isAnonymous ? 'Guest User' : user.displayName}
+                  </p>
+                  <p className="text-xs text-gray-500 truncate">
+                    {!user || user.isAnonymous ? 'Sign in to save progress' : user.email}
+                  </p>
                 </div>
               </div>
               {navItems.map((item) => (
@@ -122,13 +145,23 @@ export default function Layout({ children }: LayoutProps) {
                   {item.name}
                 </Link>
               ))}
-              <button
-                onClick={handleLogout}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-base font-medium text-red-600 hover:bg-red-50"
-              >
-                <LogOut className="w-5 h-5" />
-                Logout
-              </button>
+              {!user || user.isAnonymous ? (
+                <button
+                  onClick={() => signInWithGoogle()}
+                  className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-md hover:bg-blue-700 transition-all font-sans"
+                >
+                  <PlayCircle className="w-5 h-5" />
+                  Sign In with Google
+                </button>
+              ) : (
+                <button
+                  onClick={handleLogout}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-base font-medium text-red-600 hover:bg-red-50"
+                >
+                  <LogOut className="w-5 h-5" />
+                  Logout
+                </button>
+              )}
             </div>
           </div>
         )}
