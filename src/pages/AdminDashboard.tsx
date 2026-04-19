@@ -82,18 +82,48 @@ export default function AdminDashboard() {
     }
   };
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
   const handleDeleteVideo = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this video?')) {
-      setDeletingId(id);
-      try {
-        await api.delete(`/videos/${id}`);
-        fetchData();
-      } catch (err) {
-        console.error('Failed to delete video', err);
-        alert('Failed to delete video');
-      } finally {
-        setDeletingId(null);
-      }
+    if (confirmDeleteId !== id) {
+      setConfirmDeleteId(id);
+      // Reset after 3 seconds
+      setTimeout(() => setConfirmDeleteId(null), 3000);
+      return;
+    }
+
+    setDeletingId(id);
+    setConfirmDeleteId(null);
+    try {
+      await api.delete(`/admin/videos/${id}`);
+      fetchData();
+    } catch (err) {
+      console.error('Failed to delete video', err);
+      alert('Failed to deactivate video. Please try again.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const [confirmPermanentId, setConfirmPermanentId] = useState<string | null>(null);
+
+  const handlePermanentDelete = async (id: string) => {
+    if (confirmPermanentId !== id) {
+      setConfirmPermanentId(id);
+      setTimeout(() => setConfirmPermanentId(null), 3000);
+      return;
+    }
+
+    setDeletingId(id);
+    setConfirmPermanentId(null);
+    try {
+      await api.delete(`/admin/videos/${id}/permanent`);
+      fetchData();
+    } catch (err) {
+      console.error('Failed to permanently delete video', err);
+      alert('Failed to permanently delete video');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -277,8 +307,12 @@ export default function AdminDashboard() {
                           <button
                             onClick={() => handleDeleteVideo(video.id)}
                             disabled={deletingId === video.id}
-                            className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                            title="Delete Video"
+                            className={`p-2 rounded-lg transition-all disabled:opacity-50 ${
+                              confirmDeleteId === video.id 
+                                ? 'bg-red-600 text-white animate-pulse' 
+                                : 'text-red-600 hover:bg-red-50'
+                            }`}
+                            title={confirmDeleteId === video.id ? 'Click again to confirm' : 'Delete Video'}
                           >
                             {deletingId === video.id ? (
                               <Loader2 className="w-5 h-5 animate-spin" />
@@ -287,20 +321,38 @@ export default function AdminDashboard() {
                             )}
                           </button>
                         ) : (
-                          <button
-                            onClick={async () => {
-                              try {
-                                await api.patch(`/admin/videos/${video.id}/restore`);
-                                fetchData();
-                              } catch (err) {
-                                alert('Failed to restore video');
-                              }
-                            }}
-                            className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                            title="Restore Video"
-                          >
-                            <RotateCcw className="w-5 h-5" />
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await api.patch(`/admin/videos/${video.id}/restore`);
+                                  fetchData();
+                                } catch (err) {
+                                  alert('Failed to restore video');
+                                }
+                              }}
+                              className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                              title="Restore Video"
+                            >
+                              <RotateCcw className="w-5 h-5" />
+                            </button>
+                            <button
+                              onClick={() => handlePermanentDelete(video.id)}
+                              disabled={deletingId === video.id}
+                              className={`p-2 rounded-lg transition-all disabled:opacity-50 ${
+                                confirmPermanentId === video.id 
+                                  ? 'bg-red-700 text-white animate-pulse' 
+                                  : 'text-red-600 hover:bg-red-50'
+                              }`}
+                              title={confirmPermanentId === video.id ? 'Click AGAIN to permanently delete' : 'Permanent Delete'}
+                            >
+                              {deletingId === video.id ? (
+                                <Loader2 className="w-5 h-5 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-5 h-5" />
+                              )}
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>

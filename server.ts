@@ -235,12 +235,6 @@ async function startServer() {
     });
   });
 
-  app.delete('/api/videos/:id', authenticateToken, isAdmin, (req, res) => {
-    // Using soft delete to maintain history
-    db.prepare('UPDATE videos SET active = 0 WHERE id = ?').run(req.params.id);
-    res.json({ message: 'Video deleted' });
-  });
-
   // Watch History Routes
   app.get('/api/watched', authenticateToken, (req: any, res) => {
     const history = db.prepare(`
@@ -354,6 +348,20 @@ async function startServer() {
       ORDER BY created_at DESC
     `).all();
     res.json({ videos });
+  });
+
+  app.delete('/api/admin/videos/:id', authenticateToken, isAdmin, (req, res) => {
+    db.prepare('UPDATE videos SET active = 0 WHERE id = ?').run(req.params.id);
+    res.json({ message: 'Video deactivated' });
+  });
+
+  app.delete('/api/admin/videos/:id/permanent', authenticateToken, isAdmin, (req, res) => {
+    const transaction = db.transaction(() => {
+      db.prepare('DELETE FROM watched_videos WHERE video_id = ?').run(req.params.id);
+      db.prepare('DELETE FROM videos WHERE id = ?').run(req.params.id);
+    });
+    transaction();
+    res.json({ message: 'Video permanently deleted' });
   });
 
   app.patch('/api/admin/videos/:id/restore', authenticateToken, isAdmin, (req, res) => {
