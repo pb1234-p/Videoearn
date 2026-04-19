@@ -1,99 +1,57 @@
 import { useState, useEffect } from 'react';
-import { db, auth } from '../firebase';
-import { collection, query, where, onSnapshot, orderBy, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
-import { useAuthState } from 'react-firebase-hooks/auth';
-import { Video, UserProfile, WatchedVideo } from '../types';
+import { useAuth } from '../contexts/AuthContext';
+import { Video, WatchedVideo } from '../types';
 import Layout from '../components/Layout';
 import EmptyState from '../components/EmptyState';
-import { Play, Wallet, Trophy, Loader2, PlayCircle, AlertCircle, ArrowRight, ShieldCheck, Zap } from 'lucide-react';
+import { Play, Wallet, Trophy, Loader2, PlayCircle, ArrowRight, ShieldCheck, Zap } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { CURRENCY_SYMBOL, ADMIN_EMAIL, APP_NAME } from '../constants';
+import { CURRENCY_SYMBOL, APP_NAME } from '../constants';
 import { getYouTubeId } from '../lib/utils';
-
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
-import { signInWithGoogle } from '../firebase';
+import api from '../services/api';
 
 export default function Dashboard() {
-  const [user] = useAuthState(auth);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const { user, loading: authLoading } = useAuth();
   const [videos, setVideos] = useState<Video[]>([]);
   const [watchedVideoIds, setWatchedVideoIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Only fetch data if we have a user
-    if (!user) {
-      // If no user, we still want to show active videos as a preview
-      const videosQuery = query(collection(db, 'videos'), where('active', '==', true), orderBy('createdAt', 'desc'));
-      const unsubscribeVideos = onSnapshot(videosQuery, (snapshot) => {
-        const videoList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Video));
-        setVideos(videoList);
-        setLoading(false);
-      }, (error) => {
-        console.warn('Silent fail for public video fetch', error);
-        setLoading(false);
-      });
-      return () => unsubscribeVideos();
-    }
+    if (authLoading) return;
 
-    // Fetch or create user profile
-    const userDocRef = doc(db, 'users', user.uid);
-    const unsubscribeProfile = onSnapshot(userDocRef, async (snapshot) => {
-      if (snapshot.exists()) {
-        setProfile(snapshot.data() as UserProfile);
-      } else {
-        // Create initial profile
-        const now = new Date().toISOString();
-        const newProfile: UserProfile = {
-          uid: user.uid,
-          email: user.email || '',
-          displayName: user.displayName || 'User',
-          balance: 0,
-          totalEarned: 0,
-          role: user.email === ADMIN_EMAIL ? 'admin' : 'user',
-          createdAt: now,
-          updatedAt: now,
-        };
-        try {
-          await setDoc(userDocRef, newProfile);
-          setProfile(newProfile);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
+    const fetchData = async () => {
+      try {
+        const videosRes = await api.get('/videos');
+        setVideos(videosRes.data.videos);
+
+        if (user) {
+          try {
+            const watchedRes = await api.get('/watched');
+            const ids = new Set(watchedRes.data.history.map((w: WatchedVideo) => w.videoId));
+            setWatchedVideoIds(ids);
+          } catch (watchErr: any) {
+            if (watchErr.response?.status === 401) {
+              // Silently handle 401 for watched history if user state is stale
+              setWatchedVideoIds(new Set());
+            } else {
+              throw watchErr;
+            }
+          }
+        } else {
+          setWatchedVideoIds(new Set());
         }
+      } catch (err) {
+        console.error('Failed to fetch dashboard data', err);
+      } finally {
+        setLoading(false);
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
-    });
-
-    // Fetch watched videos
-    const watchedQuery = query(collection(db, 'watched_videos'), where('userId', '==', user.uid));
-    const unsubscribeWatched = onSnapshot(watchedQuery, (snapshot) => {
-      const ids = new Set(snapshot.docs.map(doc => (doc.data() as WatchedVideo).videoId));
-      setWatchedVideoIds(ids);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'watched_videos');
-    });
-
-    // Fetch active videos
-    const videosQuery = query(collection(db, 'videos'), where('active', '==', true), orderBy('createdAt', 'desc'));
-    const unsubscribeVideos = onSnapshot(videosQuery, (snapshot) => {
-      const videoList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Video));
-      setVideos(videoList);
-      setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'videos');
-    });
-
-    return () => {
-      unsubscribeProfile();
-      unsubscribeWatched();
-      unsubscribeVideos();
     };
-  }, [user]);
+
+    fetchData();
+  }, [user, authLoading]);
 
   const availableVideos = videos.filter(v => !watchedVideoIds.has(v.id));
 
-  if (loading) {
+  if (loading || authLoading) {
     return (
       <Layout>
         <div className="flex items-center justify-center h-64">
@@ -121,13 +79,13 @@ export default function Dashboard() {
                 Join thousands of users earning in <span className="font-bold text-white">Indian Rupees (INR)</span> just by watching YouTube videos. Simple, fast, and 100% real.
               </p>
               <div className="flex flex-col sm:flex-row gap-4">
-                <button
-                  onClick={() => signInWithGoogle()}
+                <Link
+                  to="/signin"
                   className="flex items-center justify-center gap-3 bg-white text-blue-900 font-bold py-4 px-8 rounded-2xl shadow-xl hover:bg-blue-50 transition-all scale-100 hover:scale-105 active:scale-95"
                 >
                   <PlayCircle className="w-6 h-6 text-blue-600" />
-                  Get Started for Free
-                </button>
+                  Join Now for Free
+                </Link>
               </div>
               <div className="mt-8 flex items-center gap-6 text-sm text-blue-200/80">
                 <div className="flex items-center gap-2">
@@ -154,7 +112,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <p className="text-sm text-gray-500 font-medium uppercase tracking-wider">Current Balance</p>
-                <p className="text-2xl font-bold text-gray-900">{CURRENCY_SYMBOL}{profile?.balance.toFixed(2)}</p>
+                <p className="text-2xl font-bold text-gray-900">{CURRENCY_SYMBOL}{user.balance.toFixed(2)}</p>
               </div>
             </div>
 
@@ -242,7 +200,7 @@ export default function Dashboard() {
                     <h3 className="font-bold text-gray-900 line-clamp-1 mb-2">{video.title}</h3>
                     <p className="text-sm text-gray-500 line-clamp-2 mb-4 h-10">{video.description}</p>
                     <Link
-                      to={`/watch/${video.id}`}
+                      to={user ? `/watch/${video.id}` : '/signin'}
                       className="w-full inline-flex items-center justify-center gap-2 bg-blue-600 text-white font-semibold py-2.5 px-4 rounded-xl hover:bg-blue-700 transition-colors"
                     >
                       Watch & Earn

@@ -1,10 +1,9 @@
 import { ReactNode, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { auth, logout, signInWithGoogle } from '../firebase';
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { useAuth } from '../contexts/AuthContext';
 import { 
   Home, 
-  User, 
+  User as UserIcon, 
   Wallet, 
   History, 
   LogOut, 
@@ -13,26 +12,23 @@ import {
   X,
   PlayCircle
 } from 'lucide-react';
-import { APP_NAME, ADMIN_EMAIL } from '../constants';
+import { APP_NAME } from '../constants';
 import { cn } from '../lib/utils';
+import UserAvatar from './UserAvatar';
 
 interface LayoutProps {
   children: ReactNode;
 }
 
-import UserAvatar from './UserAvatar';
-
 export default function Layout({ children }: LayoutProps) {
-  const [user] = useAuthState(auth);
+  const { user, signOut } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
-  const isAdmin = user?.email === ADMIN_EMAIL;
-
   const handleLogout = async () => {
     try {
-      await logout();
+      await signOut();
       navigate('/');
     } catch (err) {
       console.error('Logout failed', err);
@@ -43,10 +39,10 @@ export default function Layout({ children }: LayoutProps) {
     { name: 'Dashboard', path: '/', icon: Home },
     { name: 'Withdraw', path: '/withdraw', icon: Wallet },
     { name: 'History', path: '/history', icon: History },
-    { name: 'Profile', path: '/profile', icon: User },
+    { name: 'Profile', path: '/profile', icon: UserIcon },
   ];
 
-  if (isAdmin) {
+  if (user?.role === 'admin') {
     navItems.push({ name: 'Admin Panel', path: '/admin', icon: ShieldCheck });
   }
 
@@ -82,22 +78,24 @@ export default function Layout({ children }: LayoutProps) {
               ))}
               <div className="h-6 w-px bg-gray-200 mx-2"></div>
               <div className="flex items-center gap-3 pl-2">
-                <UserAvatar displayName={user?.displayName || 'G'} className="w-8 h-8" />
-                {!user || user.isAnonymous ? (
-                  <button
-                    onClick={() => signInWithGoogle()}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold shadow-sm hover:bg-blue-700 transition-all font-sans"
-                  >
-                    🚀 Sign In
-                  </button>
+                {user ? (
+                  <>
+                    <UserAvatar displayName={user.displayName} className="w-8 h-8" />
+                    <button
+                      onClick={handleLogout}
+                      className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      Logout
+                    </button>
+                  </>
                 ) : (
-                  <button
-                    onClick={handleLogout}
-                    className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+                  <Link
+                    to="/signin"
+                    className="flex items-center gap-2 px-6 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold shadow-sm hover:bg-blue-700 transition-all"
                   >
-                    <LogOut className="w-4 h-4" />
-                    Logout
-                  </button>
+                    Sign In
+                  </Link>
                 )}
               </div>
             </div>
@@ -118,17 +116,19 @@ export default function Layout({ children }: LayoutProps) {
         {isMenuOpen && (
           <div className="md:hidden bg-white border-t border-gray-200">
             <div className="px-2 pt-2 pb-3 space-y-1">
-              <div className="flex items-center gap-3 px-3 py-3 border-b border-gray-100 mb-2">
-                <UserAvatar displayName={user?.displayName || 'G'} />
-                <div className="min-w-0">
-                  <p className="text-sm font-bold text-gray-900 truncate">
-                    {!user ? 'Welcome Guest' : user.isAnonymous ? 'Guest User' : user.displayName}
-                  </p>
-                  <p className="text-xs text-gray-500 truncate">
-                    {!user || user.isAnonymous ? 'Sign in to save progress' : user.email}
-                  </p>
+              {user && (
+                <div className="flex items-center gap-3 px-3 py-3 border-b border-gray-100 mb-2">
+                  <UserAvatar displayName={user.displayName} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-gray-900 truncate">
+                      {user.displayName}
+                    </p>
+                    <p className="text-xs text-gray-500 truncate">
+                      {user.email}
+                    </p>
+                  </div>
                 </div>
-              </div>
+              )}
               {navItems.map((item) => (
                 <Link
                   key={item.name}
@@ -145,15 +145,7 @@ export default function Layout({ children }: LayoutProps) {
                   {item.name}
                 </Link>
               ))}
-              {!user || user.isAnonymous ? (
-                <button
-                  onClick={() => signInWithGoogle()}
-                  className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-md hover:bg-blue-700 transition-all font-sans"
-                >
-                  <PlayCircle className="w-5 h-5" />
-                  Sign In with Google
-                </button>
-              ) : (
+              {user ? (
                 <button
                   onClick={handleLogout}
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-base font-medium text-red-600 hover:bg-red-50"
@@ -161,6 +153,15 @@ export default function Layout({ children }: LayoutProps) {
                   <LogOut className="w-5 h-5" />
                   Logout
                 </button>
+              ) : (
+                <Link
+                  to="/signin"
+                  onClick={() => setIsMenuOpen(false)}
+                  className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-md hover:bg-blue-700 transition-all font-sans"
+                >
+                  <PlayCircle className="w-5 h-5" />
+                  Sign In
+                </Link>
               )}
             </div>
           </div>

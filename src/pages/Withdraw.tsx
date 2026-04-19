@@ -1,18 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth } from '../firebase';
-import { doc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
-import { useAuthState } from 'react-firebase-hooks/auth';
-import { UserProfile, WithdrawalRequest } from '../types';
+import { useAuth } from '../contexts/AuthContext';
+import { WithdrawalRequest } from '../types';
 import Layout from '../components/Layout';
 import { Wallet, Send, Loader2, AlertCircle, CheckCircle, Info } from 'lucide-react';
 import { CURRENCY_SYMBOL, MIN_WITHDRAWAL_AMOUNT } from '../constants';
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
-
 import WithdrawalStatus from '../components/WithdrawalStatus';
+import api from '../services/api';
 
 export default function Withdraw() {
-  const [user] = useAuthState(auth);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const { user, refreshUser } = useAuth();
   const [amount, setAmount] = useState<string>('');
   const [upiId, setUpiId] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -22,36 +18,23 @@ export default function Withdraw() {
 
   useEffect(() => {
     if (!user) return;
+    if (user.upiId) setUpiId(user.upiId);
 
-    const userDocRef = doc(db, 'users', user.uid);
-    const unsubscribeProfile = onSnapshot(userDocRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data() as UserProfile;
-        setProfile(data);
-        if (data.upiId) setUpiId(data.upiId);
+    const fetchWithdrawals = async () => {
+      try {
+        const response = await api.get('/withdrawals');
+        setRecentWithdrawals(response.data.withdrawals.slice(0, 5));
+      } catch (err) {
+        console.error('Failed to fetch withdrawals', err);
       }
-    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}`));
-
-    const withdrawalsQuery = query(
-      collection(db, 'withdrawals'),
-      where('userId', '==', user.uid),
-      orderBy('createdAt', 'desc'),
-      limit(5)
-    );
-    const unsubscribeWithdrawals = onSnapshot(withdrawalsQuery, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WithdrawalRequest));
-      setRecentWithdrawals(list);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'withdrawals'));
-
-    return () => {
-      unsubscribeProfile();
-      unsubscribeWithdrawals();
     };
+
+    fetchWithdrawals();
   }, [user]);
 
   const handleWithdraw = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !profile) return;
+    if (!user) return;
 
     const withdrawAmount = parseFloat(amount);
     if (isNaN(withdrawAmount) || withdrawAmount < MIN_WITHDRAWAL_AMOUNT) {
@@ -59,7 +42,7 @@ export default function Withdraw() {
       return;
     }
 
-    if (withdrawAmount > profile.balance) {
+    if (withdrawAmount > user.balance) {
       setError('Insufficient balance');
       return;
     }
@@ -74,23 +57,20 @@ export default function Withdraw() {
     setSuccess(null);
 
     try {
-      const now = new Date().toISOString();
-      const request: Omit<WithdrawalRequest, 'id'> = {
-        userId: user.uid,
-        userEmail: user.email || '',
-        amount: withdrawAmount,
-        upiId: upiId,
-        status: 'pending',
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      await addDoc(collection(db, 'withdrawals'), request);
+      await api.post('/withdrawals', { 
+        amount: withdrawAmount, 
+        upiId: upiId 
+      });
+      await refreshUser();
+      
       setSuccess('Withdrawal request submitted successfully! It will be processed within 24-48 hours.');
       setAmount('');
-    } catch (err) {
-      setError('Failed to submit withdrawal request');
-      handleFirestoreError(err, OperationType.CREATE, 'withdrawals');
+      
+      // Refresh list
+      const response = await api.get('/withdrawals');
+      setRecentWithdrawals(response.data.withdrawals.slice(0, 5));
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to submit withdrawal request');
     } finally {
       setLoading(false);
     }
@@ -124,7 +104,7 @@ export default function Withdraw() {
             <form onSubmit={handleWithdraw} className="space-y-6">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Available Balance</label>
-                <div className="text-3xl font-bold text-gray-900">{CURRENCY_SYMBOL}{profile?.balance.toFixed(2)}</div>
+                <div className="text-3xl font-bold text-gray-900">{CURRENCY_SYMBOL}{user?.balance.toFixed(2)}</div>
               </div>
 
               <div>

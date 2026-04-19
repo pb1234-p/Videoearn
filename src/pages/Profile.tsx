@@ -1,41 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth } from '../firebase';
-import { doc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { useAuthState } from 'react-firebase-hooks/auth';
-import { UserProfile } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 import Layout from '../components/Layout';
 import { User, Mail, Wallet, Save, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import { CURRENCY_SYMBOL } from '../constants';
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
 
 export default function Profile() {
-  const [user] = useAuthState(auth);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const { user, updateProfile } = useAuth();
+  const [displayName, setDisplayName] = useState('');
   const [upiId, setUpiId] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user) return;
-
-    const userDocRef = doc(db, 'users', user.uid);
-    const unsubscribe = onSnapshot(userDocRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data() as UserProfile;
-        setProfile(data);
-        if (data.upiId) setUpiId(data.upiId);
-      }
-    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}`));
-
-    return () => unsubscribe();
+    if (user) {
+      setDisplayName(user.displayName);
+      if (user.upiId) setUpiId(user.upiId);
+    }
   }, [user]);
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
 
-    if (!upiId.includes('@')) {
+    if (upiId && !upiId.includes('@')) {
       setError('Invalid UPI ID format');
       return;
     }
@@ -45,16 +33,11 @@ export default function Profile() {
     setSuccess(false);
 
     try {
-      const userRef = doc(db, 'users', user.uid);
-      await updateDoc(userRef, {
-        upiId: upiId,
-        updatedAt: new Date().toISOString()
-      });
+      await updateProfile(displayName, upiId);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
-    } catch (err) {
-      setError('Failed to update profile');
-      handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to update profile');
     } finally {
       setLoading(false);
     }
@@ -77,36 +60,41 @@ export default function Profile() {
           <div className="pt-16 p-8 space-y-8">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-1">
-                <p className="text-xs text-gray-500 uppercase font-bold tracking-wider">Full Name</p>
-                <div className="flex items-center gap-2 text-gray-900 font-semibold">
-                  <User className="w-4 h-4 text-gray-400" />
-                  {profile?.displayName}
+                <p className="text-xs text-gray-500 uppercase font-bold tracking-wider">Account Role</p>
+                <div className="flex items-center gap-2 text-gray-900 font-semibold capitalize">
+                  {user?.role}
                 </div>
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-gray-500 uppercase font-bold tracking-wider">Email Address</p>
                 <div className="flex items-center gap-2 text-gray-900 font-semibold">
                   <Mail className="w-4 h-4 text-gray-400" />
-                  {profile?.email}
+                  {user?.email}
                 </div>
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-gray-500 uppercase font-bold tracking-wider">Current Balance</p>
                 <div className="flex items-center gap-2 text-green-600 font-bold text-lg">
                   <Wallet className="w-5 h-5" />
-                  {CURRENCY_SYMBOL}{profile?.balance.toFixed(2)}
-                </div>
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs text-gray-500 uppercase font-bold tracking-wider">Account Role</p>
-                <div className="flex items-center gap-2 text-gray-900 font-semibold capitalize">
-                  {profile?.role}
+                  {CURRENCY_SYMBOL}{user?.balance.toFixed(2)}
                 </div>
               </div>
             </div>
 
             <form onSubmit={handleUpdateProfile} className="space-y-6 pt-8 border-t border-gray-100">
-              <h2 className="text-xl font-bold text-gray-900">Payment Information</h2>
+              <h2 className="text-xl font-bold text-gray-900">Personal Information</h2>
+              <div>
+                <label htmlFor="displayName" className="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
+                <input
+                  type="text"
+                  id="displayName"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  required
+                />
+              </div>
+
               <div>
                 <label htmlFor="upiId" className="block text-sm font-medium text-gray-700 mb-2">Default UPI ID</label>
                 <input
@@ -116,7 +104,6 @@ export default function Profile() {
                   onChange={(e) => setUpiId(e.target.value)}
                   placeholder="yourname@upi"
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                  required
                 />
                 <p className="mt-2 text-xs text-gray-500">This UPI ID will be pre-filled when you request a withdrawal.</p>
               </div>

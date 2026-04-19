@@ -1,7 +1,7 @@
 export type UserRole = 'user' | 'admin';
 
 export interface UserProfile {
-  uid: string;
+  id: string;
   email: string;
   displayName: string;
   balance: number;

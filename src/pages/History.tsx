@@ -1,36 +1,33 @@
 import { useState, useEffect } from 'react';
-import { db, auth } from '../firebase';
-import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { useAuth } from '../contexts/AuthContext';
 import { WithdrawalRequest } from '../types';
 import Layout from '../components/Layout';
-import { History as HistoryIcon, Loader2, AlertCircle, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { History as HistoryIcon, Loader2 } from 'lucide-react';
 import { CURRENCY_SYMBOL } from '../constants';
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
-
 import EmptyState from '../components/EmptyState';
 import WithdrawalStatus from '../components/WithdrawalStatus';
+import api from '../services/api';
 
 export default function History() {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!user) return;
 
-    const withdrawalsQuery = query(
-      collection(db, 'withdrawals'),
-      where('userId', '==', user.uid),
-      orderBy('createdAt', 'desc')
-    );
-    const unsubscribe = onSnapshot(withdrawalsQuery, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WithdrawalRequest));
-      setWithdrawals(list);
-      setLoading(false);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'withdrawals'));
+    const fetchWithdrawals = async () => {
+      try {
+        const response = await api.get('/withdrawals');
+        setWithdrawals(response.data.withdrawals);
+      } catch (err) {
+        console.error('Failed to fetch withdrawals', err);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-    return () => unsubscribe();
+    fetchWithdrawals();
   }, [user]);
 
   if (loading) {

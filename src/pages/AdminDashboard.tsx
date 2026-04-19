@@ -1,43 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth } from '../firebase';
-import { 
-  collection, 
-  query, 
-  onSnapshot, 
-  orderBy, 
-  addDoc, 
-  deleteDoc, 
-  doc, 
-  updateDoc, 
-  increment,
-  getDoc,
-  where
-} from 'firebase/firestore';
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { useAuth } from '../contexts/AuthContext';
 import { Video, WithdrawalRequest, UserProfile } from '../types';
 import Layout from '../components/Layout';
 import { 
   Plus, 
   Trash2, 
-  Check, 
-  X, 
   Loader2, 
   PlayCircle, 
   Wallet, 
   Users, 
-  AlertCircle,
-  Video as VideoIcon,
   ExternalLink
 } from 'lucide-react';
-import { ADMIN_EMAIL, CURRENCY_SYMBOL } from '../constants';
+import { CURRENCY_SYMBOL } from '../constants';
 import { Navigate } from 'react-router-dom';
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
 import { getYouTubeId } from '../lib/utils';
-
+import api from '../services/api';
 import AdminWithdrawalRow from '../components/AdminWithdrawalRow';
 
 export default function AdminDashboard() {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [videos, setVideos] = useState<Video[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -54,42 +35,32 @@ export default function AdminDashboard() {
   });
   const [addingVideo, setAddingVideo] = useState(false);
 
+  const fetchData = async () => {
+    try {
+      if (activeTab === 'videos') {
+        const res = await api.get('/videos');
+        setVideos(res.data.videos);
+      } else if (activeTab === 'withdrawals') {
+        const res = await api.get('/withdrawals');
+        setWithdrawals(res.data.withdrawals);
+      } else if (activeTab === 'users') {
+        const res = await api.get('/admin/users');
+        setUsers(res.data.users);
+      }
+    } catch (err) {
+      console.error('Failed to fetch admin data', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (!user || user.email !== ADMIN_EMAIL) return;
+    if (user?.role === 'admin') {
+      fetchData();
+    }
+  }, [user, activeTab]);
 
-    const unsubscribeVideos = onSnapshot(
-      query(collection(db, 'videos'), orderBy('createdAt', 'desc')),
-      (snapshot) => {
-        setVideos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Video)));
-      },
-      (error) => handleFirestoreError(error, OperationType.LIST, 'videos')
-    );
-
-    const unsubscribeWithdrawals = onSnapshot(
-      query(collection(db, 'withdrawals'), orderBy('createdAt', 'desc')),
-      (snapshot) => {
-        setWithdrawals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WithdrawalRequest)));
-      },
-      (error) => handleFirestoreError(error, OperationType.LIST, 'withdrawals')
-    );
-
-    const unsubscribeUsers = onSnapshot(
-      query(collection(db, 'users'), orderBy('createdAt', 'desc')),
-      (snapshot) => {
-        setUsers(snapshot.docs.map(doc => ({ ...doc.data() } as UserProfile)));
-        setLoading(false);
-      },
-      (error) => handleFirestoreError(error, OperationType.LIST, 'users')
-    );
-
-    return () => {
-      unsubscribeVideos();
-      unsubscribeWithdrawals();
-      unsubscribeUsers();
-    };
-  }, [user]);
-
-  if (user?.email !== ADMIN_EMAIL) {
+  if (user?.role !== 'admin') {
     return <Navigate to="/" />;
   }
 
@@ -97,21 +68,12 @@ export default function AdminDashboard() {
     e.preventDefault();
     setAddingVideo(true);
     try {
-      const now = new Date().toISOString();
-      const videoData: Omit<Video, 'id'> = {
-        title: newVideo.title,
-        description: newVideo.description,
-        youtubeUrl: newVideo.youtubeUrl,
-        rewardAmount: parseFloat(newVideo.rewardAmount),
-        duration: parseInt(newVideo.duration),
-        createdAt: now,
-        active: true,
-      };
-      await addDoc(collection(db, 'videos'), videoData);
+      await api.post('/videos', newVideo);
       setNewVideo({ title: '', description: '', youtubeUrl: '', rewardAmount: '', duration: '60' });
+      fetchData();
     } catch (err) {
       console.error('Failed to add video', err);
-      handleFirestoreError(err, OperationType.CREATE, 'videos');
+      alert('Failed to add video');
     } finally {
       setAddingVideo(false);
     }
@@ -120,52 +82,34 @@ export default function AdminDashboard() {
   const handleDeleteVideo = async (id: string) => {
     if (window.confirm('Are you sure you want to delete this video?')) {
       try {
-        await deleteDoc(doc(db, 'videos', id));
+        await api.delete(`/videos/${id}`);
+        fetchData();
       } catch (err) {
         console.error('Failed to delete video', err);
-        handleFirestoreError(err, OperationType.DELETE, `videos/${id}`);
+        alert('Failed to delete video');
       }
     }
   };
 
   const handleApproveWithdrawal = async (request: WithdrawalRequest) => {
-    if (request.status !== 'pending') return;
-    
     try {
-      const now = new Date().toISOString();
-      // 1. Update user balance (subtract the amount)
-      const userRef = doc(db, 'users', request.userId);
-      await updateDoc(userRef, {
-        balance: increment(-request.amount),
-        updatedAt: now
-      });
-
-      // 2. Update withdrawal status
-      const withdrawalRef = doc(db, 'withdrawals', request.id);
-      await updateDoc(withdrawalRef, {
-        status: 'approved',
-        updatedAt: now
-      });
+      await api.patch(`/withdrawals/${request.id}`, { status: 'approved' });
+      fetchData();
     } catch (err) {
       console.error('Failed to approve withdrawal', err);
-      handleFirestoreError(err, OperationType.WRITE, `withdrawals/${request.id}`);
     }
   };
 
   const handleRejectWithdrawal = async (id: string) => {
     try {
-      const withdrawalRef = doc(db, 'withdrawals', id);
-      await updateDoc(withdrawalRef, {
-        status: 'rejected',
-        updatedAt: new Date().toISOString()
-      });
+      await api.patch(`/withdrawals/${id}`, { status: 'rejected' });
+      fetchData();
     } catch (err) {
       console.error('Failed to reject withdrawal', err);
-      handleFirestoreError(err, OperationType.UPDATE, `withdrawals/${id}`);
     }
   };
 
-  if (loading) {
+  if (loading && videos.length === 0 && withdrawals.length === 0 && users.length === 0) {
     return (
       <Layout>
         <div className="flex items-center justify-center h-64">
@@ -362,7 +306,7 @@ export default function AdminDashboard() {
             <h2 className="text-xl font-bold text-gray-900">Registered Users ({users.length})</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {users.map((u) => (
-                <div key={u.uid} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                <div key={u.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
                   <div className="flex items-center gap-4 mb-4">
                     <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
                       <Users className="w-6 h-6 text-blue-600" />

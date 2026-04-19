@@ -1,9 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { db, auth } from '../firebase';
-import { doc, getDoc, updateDoc, increment, collection, addDoc } from 'firebase/firestore';
-import { useAuthState } from 'react-firebase-hooks/auth';
-import { Video, WatchedVideo } from '../types';
+import { useAuth } from '../contexts/AuthContext';
+import { Video } from '../types';
 import Layout from '../components/Layout';
 import VideoPlayer from '../components/VideoPlayer';
 import { YouTubeProps } from 'react-youtube';
@@ -11,12 +9,11 @@ import { Loader2, ArrowLeft, CheckCircle, AlertCircle, Timer } from 'lucide-reac
 import { Link } from 'react-router-dom';
 import { CURRENCY_SYMBOL } from '../constants';
 import { getYouTubeId } from '../lib/utils';
-
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
+import api from '../services/api';
 
 export default function WatchVideo() {
   const { videoId } = useParams<{ videoId: string }>();
-  const [user] = useAuthState(auth);
+  const { user, refreshUser } = useAuth();
   const [video, setVideo] = useState<Video | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -31,17 +28,12 @@ export default function WatchVideo() {
     const fetchVideo = async () => {
       if (!videoId || !user) return;
       try {
-        const videoDoc = await getDoc(doc(db, 'videos', videoId));
-        if (videoDoc.exists()) {
-          const videoData = { id: videoDoc.id, ...videoDoc.data() } as Video;
-          setVideo(videoData);
-          setTimeLeft(videoData.duration || 60);
-        } else {
-          setError('Video not found');
-        }
+        const response = await api.get(`/videos/${videoId}`);
+        const videoData = response.data.video;
+        setVideo(videoData);
+        setTimeLeft(videoData.duration || 60);
       } catch (err) {
         setError('Failed to load video');
-        handleFirestoreError(err, OperationType.GET, `videos/${videoId}`);
       } finally {
         setLoading(false);
       }
@@ -81,32 +73,20 @@ export default function WatchVideo() {
 
     setRewardClaimed(true);
     try {
-      const now = new Date().toISOString();
-      // 1. Add to watched_videos collection
-      const watchedVideo: WatchedVideo = {
-        userId: user.uid,
-        videoId: video.id,
-        watchedAt: now,
-        rewardEarned: video.rewardAmount
-      };
-      await addDoc(collection(db, 'watched_videos'), watchedVideo);
-
-      // 2. Update user balance and totalEarned
-      const userRef = doc(db, 'users', user.uid);
-      await updateDoc(userRef, {
-        balance: increment(video.rewardAmount),
-        totalEarned: increment(video.rewardAmount),
-        updatedAt: now
+      await api.post('/watched', { 
+        videoId: video.id, 
+        rewardEarned: video.rewardAmount 
       });
-
+      await refreshUser();
+      
       // Navigate back to dashboard after a short delay
       setTimeout(() => {
         navigate('/');
       }, 2000);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to claim reward', err);
       setRewardClaimed(false);
-      handleFirestoreError(err, OperationType.WRITE, 'watched_videos/users');
+      alert(err.response?.data?.error || 'Failed to claim reward');
     }
   };
 
@@ -179,7 +159,7 @@ export default function WatchVideo() {
               <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
                 <p className="text-sm text-blue-700">
-                  Please watch the video for at least 60 seconds to earn your reward. 
+                  Please watch the video for at least {video.duration} seconds to earn your reward. 
                   The timer will pause if you stop the video.
                 </p>
               </div>
