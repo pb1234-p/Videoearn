@@ -7,24 +7,27 @@ interface VideoPlayerProps {
 
 export default function VideoPlayer({ youtubeId, onStateChange }: VideoPlayerProps) {
   return (
-    <div className="w-full h-full min-h-[300px] sm:min-h-[400px] bg-black">
-      <YouTube
-        videoId={youtubeId}
-        className="youtube-container"
-        iframeClassName="w-full h-full aspect-video"
-        opts={{
-          width: '100%',
-          height: '100%',
-          playerVars: {
-            autoplay: 1,
-            modestbranding: 1,
-            rel: 0,
-            controls: 1,
-            origin: window.location.origin
-          },
-        }}
-        onStateChange={onStateChange}
-      />
+    <div className="w-full relative pt-[56.25%] bg-black">
+      <div className="absolute inset-0">
+        <YouTube
+          videoId={youtubeId}
+          className="w-full h-full"
+          iframeClassName="w-full h-full"
+          opts={{
+            width: '100%',
+            height: '100%',
+            playerVars: {
+              autoplay: 1,
+              modestbranding: 1,
+              rel: 0,
+              controls: 1,
+              showinfo: 0,
+              iv_load_policy: 3,
+            },
+          }}
+          onStateChange={onStateChange}
+        />
+      </div>
     </div>
   );
 }

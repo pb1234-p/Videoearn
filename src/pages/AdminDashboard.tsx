@@ -9,6 +9,7 @@ import {
   PlayCircle, 
   Wallet, 
   Users, 
+  RotateCcw,
   ExternalLink
 } from 'lucide-react';
 import { CURRENCY_SYMBOL } from '../constants';
@@ -24,6 +25,8 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'videos' | 'withdrawals' | 'users'>('videos');
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Video Form State
   const [newVideo, setNewVideo] = useState({
@@ -38,7 +41,7 @@ export default function AdminDashboard() {
   const fetchData = async () => {
     try {
       if (activeTab === 'videos') {
-        const res = await api.get('/videos');
+        const res = await api.get('/admin/videos');
         setVideos(res.data.videos);
       } else if (activeTab === 'withdrawals') {
         const res = await api.get('/withdrawals');
@@ -81,12 +84,15 @@ export default function AdminDashboard() {
 
   const handleDeleteVideo = async (id: string) => {
     if (window.confirm('Are you sure you want to delete this video?')) {
+      setDeletingId(id);
       try {
         await api.delete(`/videos/${id}`);
         fetchData();
       } catch (err) {
         console.error('Failed to delete video', err);
         alert('Failed to delete video');
+      } finally {
+        setDeletingId(null);
       }
     }
   };
@@ -225,36 +231,77 @@ export default function AdminDashboard() {
 
             {/* Video List */}
             <div className="lg:col-span-2 space-y-4">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">Manage Videos ({videos.length})</h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-gray-900">Manage Videos ({videos.length})</h2>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-500">Show Deleted</span>
+                  <button 
+                    onClick={() => setShowDeleted(!showDeleted)}
+                    className={`w-10 h-5 rounded-full transition-colors relative ${showDeleted ? 'bg-blue-600' : 'bg-gray-300'}`}
+                  >
+                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${showDeleted ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+              </div>
               {videos.length === 0 ? (
                 <div className="bg-white p-12 rounded-2xl border border-gray-100 text-center text-gray-500">
                   No videos added yet.
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {videos.map((video) => (
-                    <div key={video.id} className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex items-center gap-4">
-                      <div className="w-24 h-16 bg-gray-100 rounded-lg flex-shrink-0 overflow-hidden">
+                  {videos
+                    .filter(v => showDeleted || v.active)
+                    .map((video) => (
+                    <div key={video.id} className={`bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex items-center gap-4 ${!video.active ? 'opacity-60 bg-gray-50' : ''}`}>
+                      <div className="w-24 h-16 bg-gray-100 rounded-lg flex-shrink-0 overflow-hidden relative">
                         <img 
                           src={`https://img.youtube.com/vi/${getYouTubeId(video.youtubeUrl)}/mqdefault.jpg`}
                           className="w-full h-full object-cover"
                           referrerPolicy="no-referrer"
                         />
+                        {!video.active && (
+                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                            <span className="text-[10px] bg-red-600 text-white px-2 py-0.5 rounded font-bold uppercase">Deleted</span>
+                          </div>
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="font-bold text-gray-900 truncate">{video.title}</h3>
-                        <p className="text-xs text-gray-500">{CURRENCY_SYMBOL}{video.rewardAmount} Reward</p>
+                        <p className="text-xs text-gray-500">{CURRENCY_SYMBOL}{video.rewardAmount} Reward • {video.active ? 'Active' : 'Inactive'}</p>
                       </div>
                       <div className="flex items-center gap-2">
                         <a href={video.youtubeUrl} target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                           <ExternalLink className="w-5 h-5" />
                         </a>
-                        <button
-                          onClick={() => handleDeleteVideo(video.id)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
+                        {video.active ? (
+                          <button
+                            onClick={() => handleDeleteVideo(video.id)}
+                            disabled={deletingId === video.id}
+                            className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                            title="Delete Video"
+                          >
+                            {deletingId === video.id ? (
+                              <Loader2 className="w-5 h-5 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-5 h-5" />
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={async () => {
+                              try {
+                                await api.patch(`/admin/videos/${video.id}/restore`);
+                                fetchData();
+                              } catch (err) {
+                                alert('Failed to restore video');
+                              }
+                            }}
+                            className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                            title="Restore Video"
+                          >
+                            <RotateCcw className="w-5 h-5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}

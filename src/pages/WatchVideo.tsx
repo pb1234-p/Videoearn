@@ -124,14 +124,14 @@ export default function WatchVideo() {
         </Link>
 
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
-          <div className="bg-black aspect-video flex items-center justify-center">
+          <div className="bg-black">
             {youtubeId ? (
               <VideoPlayer
                 youtubeId={youtubeId}
                 onStateChange={handleStateChange}
               />
             ) : (
-              <div className="text-white text-center p-8">
+              <div className="text-white text-center p-12">
                 <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
                 <p>Invalid Video URL. Please contact support or try another video.</p>
               </div>

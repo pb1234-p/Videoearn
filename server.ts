@@ -115,7 +115,12 @@ async function startServer() {
       stmt.run(user.id, user.email, user.password, user.display_name, user.role, user.created_at, user.updated_at);
 
       const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-      res.cookie('auth_token', token, { httpOnly: true, secure: true, sameSite: 'strict', maxAge: 7 * 24 * 60 * 60 * 1000 });
+      res.cookie('auth_token', token, { 
+        httpOnly: true, 
+        secure: true, 
+        sameSite: 'none', 
+        maxAge: 7 * 24 * 60 * 60 * 1000 
+      });
       res.json({ user: { id: user.id, email: user.email, displayName: user.display_name, role: user.role, balance: 0, totalEarned: 0 } });
     } catch (err: any) {
       if (err.message.includes('UNIQUE constraint failed')) {
@@ -135,7 +140,12 @@ async function startServer() {
       }
 
       const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-      res.cookie('auth_token', token, { httpOnly: true, secure: true, sameSite: 'strict', maxAge: 7 * 24 * 60 * 60 * 1000 });
+      res.cookie('auth_token', token, { 
+        httpOnly: true, 
+        secure: true, 
+        sameSite: 'none', 
+        maxAge: 7 * 24 * 60 * 60 * 1000 
+      });
       res.json({ user: { id: user.id, email: user.email, displayName: user.display_name, role: user.role, balance: user.balance, totalEarned: user.total_earned, upiId: user.upi_id } });
     } catch (err) {
       res.status(500).json({ error: 'Internal server error' });
@@ -143,7 +153,11 @@ async function startServer() {
   });
 
   app.post('/api/auth/signout', (req, res) => {
-    res.clearCookie('auth_token');
+    res.clearCookie('auth_token', {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none'
+    });
     res.json({ message: 'Signed out successfully' });
   });
 
@@ -163,44 +177,79 @@ async function startServer() {
 
   // Video Routes
   app.get('/api/videos', (req, res) => {
-    const videos = db.prepare('SELECT * FROM videos WHERE active = 1 ORDER BY created_at DESC').all();
+    const videos = db.prepare(`
+      SELECT 
+        id, 
+        title, 
+        description, 
+        youtube_url AS youtubeUrl, 
+        reward_amount AS rewardAmount, 
+        duration, 
+        active, 
+        created_at AS createdAt 
+      FROM videos 
+      WHERE active = 1 
+      ORDER BY created_at DESC
+    `).all();
     res.json({ videos });
   });
 
   app.get('/api/videos/:id', (req, res) => {
-    const video = db.prepare('SELECT * FROM videos WHERE id = ?').get(req.params.id);
-    if (!video) return res.status(404).json({ error: 'Video not found' });
+    const video = db.prepare(`
+      SELECT 
+        id, 
+        title, 
+        description, 
+        youtube_url AS youtubeUrl, 
+        reward_amount AS rewardAmount, 
+        duration, 
+        active, 
+        created_at AS createdAt 
+      FROM videos 
+      WHERE id = ? AND active = 1
+    `).get(req.params.id);
+    if (!video) return res.status(404).json({ error: 'Video not found or inactive' });
     res.json({ video });
   });
 
   app.post('/api/videos', authenticateToken, isAdmin, (req, res) => {
     const { title, description, youtubeUrl, rewardAmount, duration } = req.body;
     const now = new Date().toISOString();
-    const video = {
-      id: crypto.randomUUID(),
-      title,
-      description,
-      youtubeUrl,
-      rewardAmount: parseFloat(rewardAmount),
-      duration: parseInt(duration),
-      active: 1,
-      created_at: now
-    };
+    const id = crypto.randomUUID();
+    
     db.prepare('INSERT INTO videos (id, title, description, youtube_url, reward_amount, duration, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-      video.id, video.title, video.description, video.youtubeUrl, video.rewardAmount, video.duration, video.active, video.created_at
+      id, title, description, youtubeUrl, parseFloat(rewardAmount), parseInt(duration), 1, now
     );
-    res.json({ video });
+    
+    res.json({ 
+      video: { 
+        id, 
+        title, 
+        description, 
+        youtubeUrl, 
+        rewardAmount: parseFloat(rewardAmount), 
+        duration: parseInt(duration), 
+        active: 1, 
+        createdAt: now 
+      } 
+    });
   });
 
   app.delete('/api/videos/:id', authenticateToken, isAdmin, (req, res) => {
-    db.prepare('DELETE FROM videos WHERE id = ?').run(req.params.id);
+    // Using soft delete to maintain history
+    db.prepare('UPDATE videos SET active = 0 WHERE id = ?').run(req.params.id);
     res.json({ message: 'Video deleted' });
   });
 
   // Watch History Routes
   app.get('/api/watched', authenticateToken, (req: any, res) => {
     const history = db.prepare(`
-      SELECT w.*, v.title as video_title 
+      SELECT 
+        w.user_id AS userId, 
+        w.video_id AS videoId, 
+        w.watched_at AS watchedAt, 
+        w.reward_earned AS rewardEarned,
+        v.title AS videoTitle 
       FROM watched_videos w 
       JOIN videos v ON w.video_id = v.id 
       WHERE w.user_id = ? 
@@ -232,10 +281,23 @@ async function startServer() {
   // Withdrawal Routes
   app.get('/api/withdrawals', authenticateToken, (req: any, res) => {
     let withdrawals;
+    const sql = `
+      SELECT 
+        id, 
+        user_id AS userId, 
+        user_email AS userEmail, 
+        amount, 
+        upi_id AS upiId, 
+        status, 
+        created_at AS createdAt, 
+        updated_at AS updatedAt 
+      FROM withdrawals 
+    `;
+    
     if (req.user.role === 'admin') {
-      withdrawals = db.prepare('SELECT * FROM withdrawals ORDER BY created_at DESC').all();
+      withdrawals = db.prepare(sql + ' ORDER BY created_at DESC').all();
     } else {
-      withdrawals = db.prepare('SELECT * FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
+      withdrawals = db.prepare(sql + ' WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
     }
     res.json({ withdrawals });
   });
@@ -277,8 +339,40 @@ async function startServer() {
   });
 
   // Admin Routes
+  app.get('/api/admin/videos', authenticateToken, isAdmin, (req, res) => {
+    const videos = db.prepare(`
+      SELECT 
+        id, 
+        title, 
+        description, 
+        youtube_url AS youtubeUrl, 
+        reward_amount AS rewardAmount, 
+        duration, 
+        active, 
+        created_at AS createdAt 
+      FROM videos 
+      ORDER BY created_at DESC
+    `).all();
+    res.json({ videos });
+  });
+
+  app.patch('/api/admin/videos/:id/restore', authenticateToken, isAdmin, (req, res) => {
+    db.prepare('UPDATE videos SET active = 1 WHERE id = ?').run(req.params.id);
+    res.json({ message: 'Video restored' });
+  });
+
   app.get('/api/admin/users', authenticateToken, isAdmin, (req, res) => {
-    const users = db.prepare('SELECT id, email, display_name, balance, total_earned, role, created_at FROM users').all();
+    const users = db.prepare(`
+      SELECT 
+        id, 
+        email, 
+        display_name AS displayName, 
+        balance, 
+        total_earned AS totalEarned, 
+        role, 
+        created_at AS createdAt 
+      FROM users
+    `).all();
     res.json({ users });
   });
 
